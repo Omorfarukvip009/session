@@ -1,55 +1,28 @@
-# session.py
+# login.py
 import sys
+import os
 import asyncio
 from telethon import TelegramClient
-from telethon.sessions import StringSession
-from telethon.errors import SessionPasswordNeededError
+
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
 
 async def main():
-    if len(sys.argv) < 5:
-        print("Usage:")
-        print("  Step 1: python3 session.py api_id api_hash phone request")
-        print("  Step 2: python3 session.py api_id api_hash phone otp=<code>")
-        print("  Step 3: python3 session.py api_id api_hash phone otp=<code> password=<2fa>")
-        sys.exit(1)
-
-    api_id = int(sys.argv[1])
-    api_hash = sys.argv[2]
-    phone = sys.argv[3]
-    args = sys.argv[4:]
-
-    client = TelegramClient(f"sessions/{phone}.session", api_id, api_hash)
-    await client.connect()
-
-    # Step 1: Request OTP
-    if args[0] == "request":
-        await client.send_code_request(phone)
-        print("CODE_REQUESTED")
-        await client.disconnect()
+    if len(sys.argv) < 2:
+        print("Usage: python3 login.py <session_file>")
         return
 
-    # Step 2/3: Verify OTP (+ optional password)
-    otp = None
-    password = None
-    for a in args:
-        if a.startswith("otp="):
-            otp = a.split("=")[1]
-        if a.startswith("password="):
-            password = a.split("=")[1]
+    session_file = sys.argv[1]
 
-    try:
-        if otp:
-            await client.sign_in(phone, otp)
-    except SessionPasswordNeededError:
-        if password:
-            await client.sign_in(password=password)
-        else:
-            print("NEED_2FA")
-            await client.disconnect()
-            return
+    if not os.path.exists(session_file):
+        print("❌ Session file not found.")
+        return
 
-    print(f"SESSION_FILE={phone}.session")
-    print(f"STRING_SESSION={StringSession.save(client.session)}")
+    client = TelegramClient(session_file, API_ID, API_HASH)
+    await client.start()
+
+    me = await client.get_me()
+    print(f"✅ Logged in as: {me.first_name} (@{me.username or 'no username'})")
 
     await client.disconnect()
 
