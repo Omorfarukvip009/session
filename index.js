@@ -1,14 +1,16 @@
 // index.js
 import { Telegraf } from "telegraf";
 import { exec } from "child_process";
-import fs from "fs";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// Handle /start
+const API_ID = process.env.API_ID;
+const API_HASH = process.env.API_HASH;
+
+// /start command
 bot.start((ctx) => {
   ctx.reply("👋 Welcome! Please send me your phone number (e.g. +1234567890).");
 });
@@ -23,7 +25,8 @@ bot.on("text", (ctx) => {
 
   ctx.reply("⏳ Generating session, please wait...");
 
-  const command = `python3 session.py ${process.env.API_ID} ${process.env.API_HASH} ${phone}`;
+  // Run session.py with args
+  const command = `python3 session.py ${API_ID} ${API_HASH} ${phone}`;
   exec(command, (error, stdout, stderr) => {
     if (error) {
       console.error("Exec error:", error);
@@ -39,8 +42,6 @@ bot.on("text", (ctx) => {
   });
 });
 
-// Export webhook handler for Vercel
-export default async function handler(req, res) {
-  await bot.handleUpdate(req.body, res);
-  res.status(200).send("ok");
-}
+// Launch bot in polling mode
+bot.launch();
+console.log("🚀 Bot is running on Render (polling mode)...");
