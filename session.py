@@ -1,37 +1,9 @@
 # session.py
 import sys
 import asyncio
-import json
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError
-
-HASH_FILE = "phone_hash.json"
-
-def save_hash(phone, phone_code_hash):
-    try:
-        data = json.load(open(HASH_FILE, "r"))
-    except FileNotFoundError:
-        data = {}
-    data[phone] = phone_code_hash
-    with open(HASH_FILE, "w") as f:
-        json.dump(data, f)
-
-def load_hash(phone):
-    try:
-        data = json.load(open(HASH_FILE, "r"))
-        return data.get(phone)
-    except FileNotFoundError:
-        return None
-
-def remove_hash(phone):
-    try:
-        data = json.load(open(HASH_FILE))
-        data.pop(phone, None)
-        with open(HASH_FILE, "w") as f:
-            json.dump(data, f)
-    except:
-        pass
 
 async def main():
     if len(sys.argv) < 5:
@@ -46,17 +18,17 @@ async def main():
     phone = sys.argv[3]
     args = sys.argv[4:]
 
-    client = TelegramClient(f"{phone}.session", api_id, api_hash)
+    client = TelegramClient(f"sessions/{phone}.session", api_id, api_hash)
     await client.connect()
 
-    # STEP 1: Request OTP
+    # Step 1: Request OTP
     if args[0] == "request":
-        sent_code = await client.send_code_request(phone)
-        save_hash(phone, sent_code.phone_code_hash)
+        await client.send_code_request(phone)
         print("CODE_REQUESTED")
+        await client.disconnect()
         return
 
-    # STEP 2 / 3: OTP (+ optional password)
+    # Step 2/3: Verify OTP (+ optional password)
     otp = None
     password = None
     for a in args:
@@ -65,15 +37,9 @@ async def main():
         if a.startswith("password="):
             password = a.split("=")[1]
 
-    phone_code_hash = load_hash(phone)
-    if not phone_code_hash:
-        print("ERROR: phone_code_hash not found. Run request step first.")
-        await client.disconnect()
-        return
-
     try:
         if otp:
-            await client.sign_in(phone, otp, phone_code_hash=phone_code_hash)
+            await client.sign_in(phone, otp)
     except SessionPasswordNeededError:
         if password:
             await client.sign_in(password=password)
@@ -85,7 +51,6 @@ async def main():
     print(f"SESSION_FILE={phone}.session")
     print(f"STRING_SESSION={StringSession.save(client.session)}")
 
-    remove_hash(phone)  # Clean up hash
     await client.disconnect()
 
 if __name__ == "__main__":
