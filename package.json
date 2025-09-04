@@ -1,5 +1,5 @@
 {
-  "name": "telegram-bot",
+  "name": "telegram-session-bot",
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",
