@@ -1,3 +1,4 @@
+# session.py
 import sys
 from telegram import SessionManager
 
@@ -9,3 +10,4 @@ if __name__ == "__main__":
         SessionManager.telethon(api_id, api_hash, phone)
     else:
         SessionManager.telethon()
+        
