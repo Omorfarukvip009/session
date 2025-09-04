@@ -1,6 +1,8 @@
+// index.js
 import { Telegraf } from "telegraf";
 import { exec } from "child_process";
 import fs from "fs";
+import fse from "fs-extra";
 import express from "express";
 import dotenv from "dotenv";
 
@@ -9,61 +11,71 @@ dotenv.config();
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const API_ID = process.env.API_ID;
 const API_HASH = process.env.API_HASH;
+const SESSIONS_DIR = "./sessions";
 
-const userState = {};
+fse.ensureDirSync(SESSIONS_DIR);
 
-// /login command
-bot.command("login", (ctx) => {
-  userState[ctx.chat.id] = { waitingForSession: true };
-  ctx.reply("📂 Please upload your `.session` file.");
+// =============== BOT COMMANDS =================
+
+// Start
+bot.start((ctx) => {
+  ctx.reply("👋 Welcome! Use:\n/session → Generate new session\n/login → Upload session to login");
 });
 
-// Handle uploaded document
-bot.on("document", (ctx) => {
-  const userId = ctx.chat.id;
-  if (!userState[userId]?.waitingForSession) return;
+// Generate session
+bot.command("session", (ctx) => {
+  ctx.reply("📲 Send your phone number (format: +123...)");
+  bot.on("text", async (ctx2) => {
+    const phone = ctx2.message.text.trim();
+    if (!phone.startsWith("+")) return ctx2.reply("❌ Invalid phone number.");
 
-  const file = ctx.message.document;
-  if (!file.file_name.endsWith(".session")) {
-    return ctx.reply("❌ Please upload a valid `.session` file.");
-  }
-
-  ctx.telegram.getFileLink(file.file_id).then((link) => {
-    const filePath = `./${file.file_name}`;
-    const stream = fs.createWriteStream(filePath);
-
-    fetch(link.href).then((res) => {
-      res.body.pipe(stream);
-      res.body.on("end", () => {
-        ctx.reply("⏳ Verifying session...");
-        const command = `python3 login.py ${API_ID} ${API_HASH} ${filePath}`;
-
-        exec(command, (error, stdout) => {
-          if (error) {
-            ctx.reply("❌ Login failed.");
-          } else {
-            ctx.reply(stdout || "✅ Done!");
-          }
-          userState[userId] = {};
-        });
-      });
+    ctx2.reply("⏳ Sending OTP...");
+    exec(`python3 session.py ${API_ID} ${API_HASH} ${phone} request`, (err, stdout) => {
+      if (err || !stdout.includes("CODE_REQUESTED")) {
+        return ctx2.reply("❌ Failed to send OTP.");
+      }
+      ctx2.reply("✅ OTP sent! Reply with the code you received.");
     });
   });
 });
 
-// Existing logic from before stays here...
+// Upload session & login
+bot.command("login", (ctx) => {
+  ctx.reply("📤 Please upload your `.session` file.");
+});
 
-// ================= EXPRESS WEB STATUS =================
+bot.on("document", async (ctx) => {
+  const fileName = ctx.message.document.file_name;
+  if (!fileName.endsWith(".session")) {
+    return ctx.reply("❌ Please upload a valid `.session` file.");
+  }
+
+  const filePath = `${SESSIONS_DIR}/${fileName}`;
+  const link = await ctx.telegram.getFileLink(ctx.message.document.file_id);
+
+  const res = await fetch(link.href);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  fs.writeFileSync(filePath, buffer);
+
+  ctx.reply("⏳ Logging in using session...");
+  exec(`python3 login.py ${filePath}`, (err, stdout) => {
+    if (err) return ctx.reply("❌ Login failed.");
+    ctx.reply(`✅ Login successful:\n${stdout}`);
+  });
+});
+
+// =============== EXPRESS SERVER =================
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.get("/", (req, res) => {
-  res.send("<h1>🤖 Telegram Bot Status</h1><p>✅ Bot is running!</p>");
-});
+if (process.env.MODE === "webhook") {
+  app.use(await bot.createWebhook({ domain: process.env.WEBHOOK_URL }));
+  app.listen(PORT, () => console.log(`🌐 Webhook running on port ${PORT}`));
+} else {
+  bot.launch();
+  app.get("/", (req, res) => res.send("<h1>🤖 Bot is running (polling mode)</h1>"));
+  app.listen(PORT, () => console.log(`🌐 Status page on port ${PORT}`));
+}
 
-app.listen(PORT, () => {
-  console.log(`🌐 Status page running at http://localhost:${PORT}`);
-});
-
-bot.launch();
-console.log("🚀 Bot running...");
+console.log("🚀 Bot started...");
