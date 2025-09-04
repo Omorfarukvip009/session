@@ -1,29 +1,91 @@
-# login.py
+# session.py
 import sys
-import os
 import asyncio
+import json
 from telethon import TelegramClient
+from telethon.sessions import StringSession
+from telethon.errors import SessionPasswordNeededError
 
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
+HASH_FILE = "phone_hash.json"
+
+def save_hash(phone, phone_code_hash):
+    try:
+        data = json.load(open(HASH_FILE, "r"))
+    except FileNotFoundError:
+        data = {}
+    data[phone] = phone_code_hash
+    with open(HASH_FILE, "w") as f:
+        json.dump(data, f)
+
+def load_hash(phone):
+    try:
+        data = json.load(open(HASH_FILE, "r"))
+        return data.get(phone)
+    except FileNotFoundError:
+        return None
+
+def remove_hash(phone):
+    try:
+        data = json.load(open(HASH_FILE))
+        data.pop(phone, None)
+        with open(HASH_FILE, "w") as f:
+            json.dump(data, f)
+    except:
+        pass
 
 async def main():
-    if len(sys.argv) < 2:
-        print("Usage: python3 login.py <session_file>")
+    if len(sys.argv) < 5:
+        print("Usage:")
+        print("  Step 1: python3 session.py api_id api_hash phone request")
+        print("  Step 2: python3 session.py api_id api_hash phone otp=<code>")
+        print("  Step 3: python3 session.py api_id api_hash phone otp=<code> password=<2fa>")
+        sys.exit(1)
+
+    api_id = int(sys.argv[1])
+    api_hash = sys.argv[2]
+    phone = sys.argv[3]
+    args = sys.argv[4:]
+
+    client = TelegramClient(f"{phone}.session", api_id, api_hash)
+    await client.connect()
+
+    # STEP 1: Request OTP
+    if args[0] == "request":
+        sent_code = await client.send_code_request(phone)
+        save_hash(phone, sent_code.phone_code_hash)
+        print("CODE_REQUESTED")
         return
 
-    session_file = sys.argv[1]
+    # STEP 2 / 3: OTP (+ optional password)
+    otp = None
+    password = None
+    for a in args:
+        if a.startswith("otp="):
+            otp = a.split("=")[1]
+        if a.startswith("password="):
+            password = a.split("=")[1]
 
-    if not os.path.exists(session_file):
-        print("❌ Session file not found.")
+    phone_code_hash = load_hash(phone)
+    if not phone_code_hash:
+        print("ERROR: phone_code_hash not found. Run request step first.")
+        await client.disconnect()
         return
 
-    client = TelegramClient(session_file, API_ID, API_HASH)
-    await client.start()
+    try:
+        if otp:
+            await client.sign_in(phone, otp, phone_code_hash=phone_code_hash)
+    except SessionPasswordNeededError:
+        if password:
+            await client.sign_in(password=password)
+        else:
+            print("NEED_2FA")
+            await client.disconnect()
+            return
 
-    me = await client.get_me()
-    print(f"✅ Logged in as: {me.first_name} (@{me.username or 'no username'})")
+    print(f"SESSION_FILE={phone}.session")
+    print(f"STRING_SESSION={StringSession.save(client.session)}")
 
+    remove_hash(phone)  # Clean up hash
     await client.disconnect()
 
 if __name__ == "__main__":
