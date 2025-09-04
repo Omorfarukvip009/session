@@ -1,4 +1,3 @@
-// index.js
 import { Telegraf } from "telegraf";
 import { exec } from "child_process";
 import fs from "fs";
@@ -11,7 +10,7 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const API_ID = process.env.API_ID;
 const API_HASH = process.env.API_HASH;
 
-const userState = {}; // Store per-user states
+const userState = {};
 
 // STEP 0: Start
 bot.start((ctx) => {
@@ -33,9 +32,9 @@ bot.on("text", (ctx) => {
     exec(command, (error, stdout) => {
       if (error) return ctx.reply("❌ Verification failed.");
 
+      stdout = stdout.trim();
       if (stdout.includes("SESSION_FILE")) {
         ctx.reply("✅ Session generated!");
-
         const filePath = `${phone}.session`;
         if (fs.existsSync(filePath)) {
           ctx.replyWithDocument({ source: filePath, filename: `${phone}.session` });
@@ -49,7 +48,7 @@ bot.on("text", (ctx) => {
         ctx.reply("❌ Failed to generate session.");
       }
 
-      userState[userId] = {}; // reset
+      userState[userId] = {};
     });
     return;
   }
@@ -64,6 +63,7 @@ bot.on("text", (ctx) => {
     exec(command, (error, stdout) => {
       if (error) return ctx.reply("❌ OTP verification failed.");
 
+      stdout = stdout.trim();
       if (stdout.includes("NEED_2FA")) {
         userState[userId] = { phone, otp, waitingForPassword: true };
         return ctx.reply("🔒 Your account has 2FA enabled. Please send your password:");
@@ -71,7 +71,6 @@ bot.on("text", (ctx) => {
 
       if (stdout.includes("SESSION_FILE")) {
         ctx.reply("✅ Session generated!");
-
         const filePath = `${phone}.session`;
         if (fs.existsSync(filePath)) {
           ctx.replyWithDocument({ source: filePath, filename: `${phone}.session` });
@@ -85,7 +84,7 @@ bot.on("text", (ctx) => {
         ctx.reply("❌ Failed to generate session.");
       }
 
-      userState[userId] = {}; // reset
+      userState[userId] = {};
     });
     return;
   }
